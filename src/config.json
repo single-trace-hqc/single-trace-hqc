@@ -1,0 +1,12 @@
+{   
+    "hqc1": {
+        "lib path": "./hqc-v5.0.0/build/ref/libhqc-1.so",
+        "n": 17669,
+        "n1": 46,
+        "n2": 384,
+        "w": 66,
+        "message length": 16,
+        "l": 51,
+        "wr": 75
+    }
+}
