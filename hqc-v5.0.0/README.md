@@ -1,7 +1,9 @@
 # HQC Ref Build Notes
 
 This folder is for building the HQC reference implementation.
-Upstream HQC is used as a Git submodule.
+Upstream HQC is used as a Git submodule. 
+`Makefile` builds `hqc-1` by default. 
+It builds a shared library.
 
 Submodule path:
 `hqc-v5.0.0/next-release`
@@ -14,9 +16,6 @@ Tracked branch:
 
 Pinned commit:
 `f46e542`
-
-`Makefile` builds `hqc-1` by default. 
-It builds a shared library.
 
 ## Patches
 
