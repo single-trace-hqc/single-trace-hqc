@@ -1,4 +1,0 @@
-[submodule "hqc-v5.0.0/next-release"]
-	path = hqc-v5.0.0/next-release
-	url = https://gitlab.com/pqc-hqc/hqc.git
-	branch = next-release
