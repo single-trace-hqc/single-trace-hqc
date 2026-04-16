@@ -5,7 +5,8 @@ import numpy as np
 from scipy.sparse import identity, hstack
 from pathlib import Path
 import gc
-from util import setup_logging, load_config, generate_random_binary_vector, apply_bit_flip, sparse_circulant, calculate_num_errors_first_n
+from isd import ISDSimulator
+from util import setup_logging, load_config, generate_random_binary_vector, apply_bit_flip, sparse_circulant
 
 def calculate_initial_llr(noisy_obs, n, wy, rho):
     """Calculates the initial LLR vectors for syndrome bits and variable nodes."""
@@ -101,8 +102,8 @@ def run_mdpc_decode(mdpc_decode_func, matrix_params, init_llr, n, max_iter):
         logging.error(f"Error during C function call for max_iter={max_iter}: {e}")
         return None, None
 
+    
     return final_llr_np
-
 
 def main(scheme, rho, max_iter):
     # Load configuration and setup
@@ -114,15 +115,41 @@ def main(scheme, rho, max_iter):
     l = params.get("l", "l_not_specified")
     wr = params.get("wr", "wr_not_specified")
 
-    setup_logging(script='calc_num_errors_VC', scheme=scheme)
+    setup_logging(script='simulationVC', scheme=scheme)
 
     # load mdpc bp function from C library
     lib_path = "./src/libMDPCBP.so"
     mdpc_decode_func = setup_mdpcbp(lib_path)
     
-    num_keys = 100
-    num_errors_first_n_list = []
+    # selection range multiplier for ISD sampling.
+    select_scale = 1.2
 
+    # initialize the ISD simulator
+    isdsim = ISDSimulator(n=n, l=l, select_scale=select_scale)
+
+    # ==========================================================
+    # CONFIGURATION: Choose which statistic to calculate
+    # Options: "p_one_shot" or "exp_num_draws"
+    STATISTIC_TO_CALCULATE = "exp_num_draws" 
+    # ==========================================================
+
+    num_keys = 10
+
+    if STATISTIC_TO_CALCULATE == "p_one_shot":
+        calculation_function = isdsim.calculate_p_one_shot_for_one_key
+        num_exp = 100000 # Number of experiments for each key to estimate p_one_shot. This is slow.
+        func_kwargs = {'num_experiments': num_exp} # Additional parameters 
+        logging.info(f"Calculated p_one_shot for {num_keys} random keys. Max iteration is {max_iter}. Rho is {rho}.")
+        output_filename = f"vc_p_one_shot_{scheme}_rho={rho}_select_scale={select_scale}_max_iter={max_iter}_num_keys={num_keys}_num_experiments={num_exp}.txt"
+    elif STATISTIC_TO_CALCULATE == "exp_num_draws":
+        calculation_function = isdsim.experiment_num_draws_for_one_key
+        func_kwargs = {} # No extra arguments for this function
+        logging.info(f"Experiment number of draws to succeed for {num_keys} random keys (bounded by T=1024).")
+        output_filename = f"vc_exp_num_draws_{scheme}_rho={rho}_select_scale={select_scale}_max_iter={max_iter}_num_keys={num_keys}.txt"
+    else:
+        raise ValueError(f"Unknown statistic type: '{STATISTIC_TO_CALCULATE}'")
+    
+    all_results = [] # A list to store results(p_one_shot or exp_num_draws)for all keys
     for _ in range(num_keys):
         r1 = generate_random_binary_vector(n, wr)
         r2 = generate_random_binary_vector(n, wr)
@@ -147,21 +174,25 @@ def main(scheme, rho, max_iter):
         sorted_xy = xy[sorted_indices]
         sorted_llr = final_llr[sorted_indices]
 
-        num_errors_first_n = calculate_num_errors_first_n(n=n,array=sorted_xy)
+        # Use the following as base for weighted sampling for the valid ciphertext attack. This is not a probability, but a score with the same ranking direction as the probability of being 1. Since final_llr is the LLR of being 0, this reverses the LLR ranking. In isd.py, the weight used is 1/sorted_xy_probabilities, which favors positions more likely to be 0.
+        sorted_xy_probabilities = 1.1*np.max(sorted_llr) - sorted_llr
+
+        result = calculation_function(
+            sorted_xy=sorted_xy, 
+            sorted_xy_probabilities=sorted_xy_probabilities, 
+            **func_kwargs
+        )
         
-        num_errors_first_n_list.append(num_errors_first_n)
-        
+        all_results.append(result)
+
         del H0_sparse, H1_sparse, H_sparse, x, y, xy, syndrome, noisy_syndrome, initial_llr, matrix_params
         gc.collect()
 
-    logging.info(f"Iter = {max_iter}, rho={rho}: average number of errors in the first n positions over {num_keys} keys: {np.mean(num_errors_first_n_list)}")
-
-    # save results and num_errors_at_n_list
+    # save results
     output_dir = Path('./output')
     output_dir.mkdir(exist_ok=True)
-    output_name = f"vc_num_errors_first_n_{scheme}_rho={rho}_max_iter={max_iter}_num_keys={num_keys}.npy"
-    np.save(output_dir / output_name, np.array(num_errors_first_n_list))
-    logging.info(f"Num errors in the first n positions saved to {output_dir / output_name}.")
+    np.savetxt(output_dir/output_filename, np.array(all_results), fmt="%.18g")
+    logging.info(f"Results saved to {output_filename}.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
