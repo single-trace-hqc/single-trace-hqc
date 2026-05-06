@@ -7,6 +7,9 @@ import json
 import math
 from pathlib import Path
 from scipy.sparse import identity, hstack, csr_matrix, coo_matrix
+import os
+import hashlib
+
 
 
 def generate_random_binary_vector(length, weight):
@@ -45,6 +48,9 @@ def calculate_num_errors_first_n(n,array):
     half_sorted_xy = array[:n]
     return np.sum(half_sorted_xy)
 
+def load_lib(lib_path):
+    lib = ctypes.CDLL(lib_path)
+    return lib
 
 def load_config(scheme):
     with open('./src/config.json', 'r') as file:
@@ -99,6 +105,34 @@ def sample_vector_from_scheme(scheme):
     
     return vector
 
+def bit_array_to_uint64(vector):
+    # Convert a binary array (LSB-first) into packed uint64 words for the C implementation
+    len_64 = max(1, math.ceil(len(vector) / 64))
+    uint64_values = []
+    for word_index in range(len_64):
+        word = 0
+        base = word_index * 64
+        for bit_offset in range(64):
+            bit_index = base + bit_offset
+            if bit_index < len(vector) and vector[bit_index] & 1:
+                word |= 1 << bit_offset
+        uint64_values.append(word)
+
+    return (ctypes.c_uint64 * len_64)(*uint64_values)
+
+def rm_decoder_result_wo_noise(eXORu,lib):
+    # This function in C is added by the paper's authors to output the RM decoder result for one block
+    rm_decoder = lib.reed_muller_decode_one_block
+    rm_decoder.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]
+    rm_decoder.restype = None
+
+    vector_64 = bit_array_to_uint64(eXORu)
+    message = (ctypes.c_uint64 * 1)()
+    rm_decoder(message, vector_64)
+
+    byte_view = ctypes.cast(message, ctypes.POINTER(ctypes.c_uint8))
+    return int(byte_view[0])
+
 
 def sample_binary_vector_in_weight_range(n2, min_weight, max_weight):
     """
@@ -139,3 +173,10 @@ def mutate3bits(vector): # flip three bits
     for flip_index in flip_indices:
         vector[flip_index] ^= 1
     return vector
+
+def hqc_entropy_for_key(key_idx, env_var="HQC_SEED_HEX", seed_len=32):
+    seed_hex = os.environ.get(env_var)
+    if not seed_hex:
+        return os.urandom(seed_len)
+    master_seed = bytes.fromhex(seed_hex)
+    return hashlib.sha256(master_seed + key_idx.to_bytes(4, "little")).digest()
